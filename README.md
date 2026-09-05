@@ -229,4 +229,4 @@ Only two of Penn's four undergraduate schools are seeded. Nursing and Wharton wo
 
 ## Time spent
 
-Roughly nine hours.
+Roughly four hours.
