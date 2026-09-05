@@ -1,28 +1,36 @@
 """Fill the rest of a plan automatically.
 
-Given whatever the student has already placed by hand, this drops every
-remaining degree requirement into a term that keeps prerequisites in order and
-keeps the load even. Existing placements are never moved, so the feature is
-additive and a student cannot lose work by pressing it.
+Given whatever the student has placed by hand, this lays out the remaining
+degree. Existing placements are never moved, so the feature is additive and
+pressing it cannot lose work.
 
-Two things make the output a schedule a person would actually follow rather
-than merely a legal one.
+There are two halves. Choosing *what* to take, which is now driven by the
+program's requirement rows rather than a hardcoded course list, and choosing
+*when*, which is a scheduling problem.
 
-Ordering is by critical path. The prerequisite relation is a DAG, and each
-course is given a height: the length of the longest chain of courses that
-depend on it. CIS 1200 has a high height because CIS 1210, CIS 3200 and the
-systems courses all sit downstream of it, while a technical elective placeholder
-has a height of zero. Scheduling by height descending puts the long chains into
-the early terms and lets the free-floating electives fill whatever is left. A
-plain topological order does not do this: it would happily hand the first term
-to four electives and push CIS 1210 into third year, which is a valid plan and
-a useless one.
+**Choosing what.** Each requirement row names its options. Picking the first
+alphabetically is a trap: the mechanics requirement lists MEAM 1100 before
+PHYS 0150, and MEAM 1100 drags in a lab course that no requirement asks for.
+So options are scored by the size of the prerequisite closure they would add
+to the plan, and the cheapest wins. PHYS 0150 needs only MATH 1400, which is
+already required, so it costs nothing; MEAM 1100 costs one extra course.
 
-Placement is balanced rather than earliest-fit. Each course goes into the first
+**Choosing when.** Two things make the output a schedule a person would follow
+rather than merely a legal one.
+
+Ordering is by critical path. Each course gets a height: the length of the
+longest chain of courses that depend on it. CIS 1200 is high because CIS 1210,
+CIS 3200 and the systems courses sit downstream. An elective slot is zero.
+Scheduling by height descending puts the long chains into the early terms. A
+plain topological order does not do this: it would hand the first term to four
+electives and push CIS 1210 into third year, which is a valid plan and a
+useless one.
+
+Placement is balanced rather than earliest-fit. A course goes into the first
 term at or after its earliest legal term that is still under a soft target of
-about one eighth of the degree. Only when no such term exists does it use the
-headroom up to the real overload limit. Earliest-fit alone packs the first years
-to the cap and leaves the last term empty.
+roughly one eighth of the degree, and only uses the headroom up to the real
+overload limit when no such term exists. Earliest-fit alone packs the first
+years to the cap and leaves the last term empty.
 """
 
 from __future__ import annotations
@@ -32,67 +40,139 @@ from collections import defaultdict
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..catalog import CORE, MNS
 from ..config import settings
-from ..models import Course, Plan, PlanCourse
+from ..models import MATCH_EXPLICIT, MATCH_PATTERN, MATCH_SLOT, Course, Plan, PlanCourse
+from .audit import DegreeAudit, build_requirement_views
+from .planner import equivalence_map
 from .plans import load_courses, load_prerequisites
 
-# The math and science courses the autofill lays down. The degree allows
-# several equivalent routes here (honors physics, different linear algebra
-# options); this picks one standard route and the student can swap afterwards.
-DEFAULT_MNS_TRACK = [
-    "MATH 1400",
-    "MATH 1410",
-    "MATH 2400",
-    "CIS 1600",
-    "CIS 2610",
-    "PHYS 0150",
-    "PHYS 0151",
-    "MNS-1",
-]
+
+def _closure(course_id, prereqs, have: set[int], memo: dict[int, frozenset[int]]):
+    """Courses that would have to join `have` for this one to be takeable.
+
+    Each OR-group contributes whichever option is cheapest to add, which is
+    what makes PHYS 0150 win over MEAM 1100 for the mechanics requirement.
+    """
+    if course_id in have:
+        return frozenset()
+    if course_id in memo:
+        return memo[course_id]
+    memo[course_id] = frozenset({course_id})  # guards cyclic corequisites
+
+    needed = {course_id}
+    for group in prereqs.get(course_id, []):
+        if any(rid in have for rid in group.required_ids):
+            continue
+        best = min(
+            (_closure(rid, prereqs, have, memo) for rid in group.required_ids),
+            key=len,
+            default=frozenset(),
+        )
+        needed |= best
+    result = frozenset(needed)
+    memo[course_id] = result
+    return result
 
 
-def _target_courses(all_courses: list[Course]) -> list[Course]:
-    by_code = {course.code: course for course in all_courses}
-    targets: list[Course] = []
-    seen: set[int] = set()
-    claimed_keys: set[str] = set()
+def choose_courses(db: Session, plan: Plan, already: set[int]) -> list[Course]:
+    """Which courses to add, driven entirely by the program's requirements.
 
-    def add(course: Course | None) -> None:
-        if course is None or course.id in seen:
-            return
-        # CIS 4480 and CIS 5480 are one course, and both carry the core
-        # category. Scheduling both would produce a plan that immediately
-        # reports itself as double counting, so take whichever comes first.
+    The loop below asks the audit what is still unsatisfied, adds one course
+    toward each outstanding row, and re-runs the matching. Guessing instead is
+    what an earlier version did, and it was wrong in both directions: it either
+    added a second chemistry sequence because a prerequisite had already
+    supplied the first, or skipped a row entirely because a course that looked
+    like it could fill it was in fact already spent on another requirement.
+    Only the matcher knows which, so only the matcher is asked.
+    """
+    all_courses = {c.id: c for c in db.execute(select(Course)).scalars().all()}
+    prereqs = load_prerequisites(db)
+    info = load_courses(db)
+    requirements = build_requirement_views(plan.program)
+    engine = DegreeAudit(requirements, info, equivalence_map(info))
+
+    by_tag: dict[str, list[Course]] = defaultdict(list)
+    for course in all_courses.values():
+        if course.is_slot and course.slot_tag:
+            by_tag[course.slot_tag].append(course)
+    for courses in by_tag.values():
+        courses.sort(key=lambda c: c.code)
+
+    chosen: list[int] = []
+    have = set(already)
+    claimed_keys = {
+        all_courses[cid].equivalence_key
+        for cid in already
+        if cid in all_courses and all_courses[cid].equivalence_key
+    }
+
+    def take(course: Course) -> bool:
+        if course.id in have:
+            return False
+        if course.equivalence_key and course.equivalence_key in claimed_keys:
+            return False
         if course.equivalence_key:
-            if course.equivalence_key in claimed_keys:
-                return
             claimed_keys.add(course.equivalence_key)
-        seen.add(course.id)
-        targets.append(course)
+        have.add(course.id)
+        chosen.append(course.id)
+        return True
 
-    for course in all_courses:
-        if course.category == CORE:
-            add(course)
-    for code in DEFAULT_MNS_TRACK:
-        add(by_code.get(code))
-    for course in all_courses:
-        # Placeholder slots stand for the elective buckets, so filling them
-        # completes the degree without pretending to choose electives for you.
-        if course.is_placeholder and course.category != MNS:
-            add(course)
-    return targets
+    def candidates(requirement) -> list[Course]:
+        if requirement.match_kind == MATCH_SLOT:
+            pool = [c for c in by_tag.get(requirement.slot_tag or "", []) if c.id not in have]
+        elif requirement.match_kind == MATCH_PATTERN:
+            pool = [
+                c for c in all_courses.values()
+                if not c.is_slot
+                and c.subject in requirement.subjects
+                and c.level is not None
+                and c.level >= (requirement.min_level or 0)
+                and c.id not in have
+            ]
+        else:
+            pool = [
+                all_courses[cid] for cid in requirement.option_ids
+                if cid in all_courses and cid not in have
+            ]
+        # Cheapest to reach first: PHYS 0150 needs only MATH 1400, which the
+        # degree already requires, while MEAM 1100 drags in a lab course too.
+        return sorted(pool, key=lambda c: (len(_closure(c.id, prereqs, have, {})), c.code))
+
+    # Bounded by the number of requirement slots, since every pass that does
+    # not add a course exits.
+    for _ in range(sum(r.slots for r in requirements) + 1):
+        result = engine.run(sorted(have))
+        outstanding = [row for row in result.requirements if not row.satisfied]
+        if not outstanding:
+            break
+
+        progress = False
+        for row in outstanding:
+            for course in candidates(row.requirement):
+                support = sorted(
+                    _closure(course.id, prereqs, have, {}) - {course.id},
+                    key=lambda cid: all_courses[cid].code,
+                )
+                if take(course):
+                    for support_id in support:
+                        take(all_courses[support_id])
+                    progress = True
+                    break
+        if not progress:
+            break
+
+    return [all_courses[cid] for cid in chosen]
 
 
-def _heights(targets: list[Course], prereqs) -> dict[int, int]:
+def _heights(course_ids: list[int], prereqs) -> dict[int, int]:
     """Longest chain of dependents below each course, by memoized descent."""
-    target_ids = {course.id for course in targets}
+    target = set(course_ids)
     dependents: dict[int, set[int]] = defaultdict(set)
-    for course in targets:
-        for group in prereqs.get(course.id, []):
+    for course_id in course_ids:
+        for group in prereqs.get(course_id, []):
             for required_id in group.required_ids:
-                if required_id in target_ids:
-                    dependents[required_id].add(course.id)
+                if required_id in target:
+                    dependents[required_id].add(course_id)
 
     height: dict[int, int] = {}
     visiting: set[int] = set()
@@ -101,7 +181,6 @@ def _heights(targets: list[Course], prereqs) -> dict[int, int]:
         if course_id in height:
             return height[course_id]
         if course_id in visiting:
-            # Only reachable if the seeded prerequisite data contains a cycle.
             return 0
         visiting.add(course_id)
         below = [compute(child) for child in dependents.get(course_id, ())]
@@ -109,32 +188,23 @@ def _heights(targets: list[Course], prereqs) -> dict[int, int]:
         height[course_id] = 1 + max(below) if below else 0
         return height[course_id]
 
-    for course in targets:
-        compute(course.id)
+    for course_id in course_ids:
+        compute(course_id)
     return height
 
 
-def _earliest_legal_term(course: Course, prereqs, placements: dict[int, int]) -> int | None:
-    """The first term this course could legally sit in, or None if it cannot."""
+def _earliest_legal_term(course, prereqs, placements: dict[int, int]) -> int | None:
     earliest = course.min_term_index
     for group in prereqs.get(course.id, []):
         scheduled = [placements[rid] for rid in group.required_ids if rid in placements]
         if not scheduled:
-            # Nothing that satisfies this group is in the plan and nothing will
-            # be, so the course has to stay out rather than be placed illegally.
             return None
         first = min(scheduled)
         earliest = max(earliest, first if group.allow_concurrent else first + 1)
     return earliest
 
 
-def _choose_term(
-    earliest: int,
-    credits: float,
-    load: list[float],
-    terms: int,
-    preferred: int | None = None,
-) -> int | None:
+def _choose_term(earliest, credits, load, terms, preferred=None) -> int | None:
     if (
         preferred is not None
         and earliest <= preferred < terms
@@ -148,10 +218,10 @@ def _choose_term(
     return None
 
 
-def autofill_plan(db: Session, plan: Plan, terms: int) -> None:
-    all_courses = list(db.execute(select(Course)).scalars().all())
-    prereqs = load_prerequisites(db)
+def autofill_plan(db: Session, plan: Plan) -> None:
+    terms = plan.program.term_count
     info = load_courses(db)
+    prereqs = load_prerequisites(db)
 
     existing = {
         row.course_id: row.term_index
@@ -165,27 +235,32 @@ def autofill_plan(db: Session, plan: Plan, terms: int) -> None:
         if 0 <= term < terms and course_id in info:
             load[term] += info[course_id].credits
 
-    targets = _target_courses(all_courses)
-    height = _heights(targets, prereqs)
-    remaining = [course for course in targets if course.id not in existing]
-    # Courses with an advising-recommended term are seated first so that term is
-    # still empty enough to take them. After that, highest critical path first,
-    # then by code so a given catalog always produces the same schedule.
-    remaining.sort(
+    targets = choose_courses(db, plan, set(existing))
+    if not targets:
+        return
+
+    # Spread the soft cap over however many terms this program spans, so a
+    # twelve-unit second major does not try to fill four years.
+    total = sum(course.credits for course in targets) + sum(load)
+    soft = max(settings.balanced_term_credits, 0.0)
+    settings_soft = min(soft, max(1.0, total / terms + 0.25))
+
+    height = _heights([c.id for c in targets], prereqs)
+    remaining = sorted(
+        targets,
         key=lambda course: (
             0 if course.preferred_term is not None else 1,
             -height[course.id],
             course.code,
-        )
+        ),
     )
 
     placements = dict(existing)
     additions: list[PlanCourse] = []
 
-    # A course can only be placed once its prerequisites are, and sorting by
-    # height does not guarantee that on its own: two courses of equal height can
-    # depend on each other's neighbours. Sweeping repeatedly until a pass places
-    # nothing settles it, and the sort keeps the sweeps in the right order.
+    # Sorting by height does not guarantee prerequisites are placed first, since
+    # two courses of equal height can depend on each other's neighbours.
+    # Sweeping until a pass places nothing settles it.
     progress = True
     while progress:
         progress = False
@@ -193,12 +268,8 @@ def autofill_plan(db: Session, plan: Plan, terms: int) -> None:
             earliest = _earliest_legal_term(course, prereqs, placements)
             if earliest is None:
                 continue
-            term = _choose_term(
-                earliest, course.credits, load, terms, course.preferred_term
-            )
+            term = _pick(earliest, course, load, terms, settings_soft)
             if term is None:
-                # No term has room. The course stays unplaced and shows up in
-                # the "not yet planned" note instead of being forced somewhere.
                 remaining.remove(course)
                 continue
             placements[course.id] = term
@@ -212,3 +283,17 @@ def autofill_plan(db: Session, plan: Plan, terms: int) -> None:
     if additions:
         db.add_all(additions)
         db.commit()
+
+
+def _pick(earliest, course, load, terms, soft) -> int | None:
+    if (
+        course.preferred_term is not None
+        and earliest <= course.preferred_term < terms
+        and load[course.preferred_term] + course.credits <= settings.max_term_credits
+    ):
+        return course.preferred_term
+    for cap in (soft, settings.max_term_credits):
+        for term in range(earliest, terms):
+            if load[term] + course.credits <= cap:
+                return term
+    return None

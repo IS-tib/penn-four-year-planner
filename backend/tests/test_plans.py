@@ -17,7 +17,7 @@ def test_placing_a_course_returns_the_whole_plan(account):
     detail = response.json()
     assert _codes(detail) == {"CIS 1200"}
     assert detail["terms"][0]["credits"] == 1.0
-    assert "diagnostics" in detail and "progress" in detail
+    assert "diagnostics" in detail and "audit" in detail
 
 
 def test_a_course_cannot_be_placed_twice_in_one_plan(account):
@@ -109,7 +109,13 @@ def test_one_account_cannot_write_to_another_accounts_plan(account, other_accoun
 
 def test_creating_and_renaming_a_plan(account):
     created = account.client.post(
-        "/api/plans", json={"name": "Backup plan", "start_year": 2026}, headers=account.headers
+        "/api/plans",
+        json={
+            "program_id": account.program("CIS-BSE")["id"],
+            "name": "Backup plan",
+            "start_year": 2026,
+        },
+        headers=account.headers,
     )
     assert created.status_code == 201
     plan_id = created.json()["id"]
@@ -133,9 +139,7 @@ def test_deleting_a_plan_removes_its_placements(account, db):
 
 
 def test_term_labels_follow_the_start_year(account):
-    created = account.client.post(
-        "/api/plans", json={"name": "Class of 2030", "start_year": 2026}, headers=account.headers
-    ).json()
+    created = account.new_plan(name="Class of 2030")
     labels = [term["label"] for term in created["terms"]]
     assert labels == [
         "Fall 2026", "Spring 2027",

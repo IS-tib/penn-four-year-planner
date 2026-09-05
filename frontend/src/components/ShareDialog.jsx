@@ -5,7 +5,7 @@ import { Dialog } from "./Dialog.jsx";
 export function ShareDialog({ shareToken, busy, onCreate, onRevoke, onClose }) {
   const [copied, setCopied] = useState(false);
   const url = shareToken
-    ? `${window.location.origin}${window.location.pathname}?share=${shareToken}`
+    ? `${window.location.origin}/shared/${shareToken}`
     : null;
 
   async function copy() {

@@ -101,9 +101,27 @@ def test_running_autofill_twice_adds_nothing_the_second_time(account):
 
 def test_autofill_covers_the_full_degree(account):
     detail = _fill(account)
-    # 37 CU is the published degree total. The autofill lays out one standard
-    # route through it, so a full plan should reach that figure.
-    assert detail["total_planned_credits"] == detail["degree_total_credits"]
+    audit = detail["audit"]
+    assert audit["complete"] is True
+    assert audit["satisfied_count"] == audit["requirement_count"]
+    # Every requirement filled means the matched credits equal the degree.
+    assert audit["credits_matched"] == detail["required_credits"] == 37.0
+
+
+def test_autofill_works_for_every_seeded_program(account):
+    """The scheduler is program-driven, so it has to hold for all ten.
+
+    This is the test that would have caught the corequisite cycle in the
+    mechanical engineering data, which blocked six requirements and which no
+    computer science plan ever touches.
+    """
+    for code in account.programs():
+        plan = account.new_plan(code, name=code)
+        detail = account.autofill(plan["id"])
+        audit = detail["audit"]
+        problems = [d for d in detail["diagnostics"] if d["severity"] != "info"]
+        assert audit["complete"] is True, f"{code} did not complete"
+        assert problems == [], f"{code} produced {problems}"
 
 
 def test_autofill_only_touches_the_callers_own_plan(account, other_account):

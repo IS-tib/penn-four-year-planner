@@ -51,14 +51,20 @@ def test_a_senior_standing_course_is_only_offered_in_the_fourth_year(account):
     assert "CIS 4000" in _codes(_eligible(account, 6))
 
 
-def test_results_are_ordered_by_how_much_they_unlock(account):
-    rows = _eligible(account, 0, exclude_placeholders=True)
+def test_results_lead_with_what_the_degree_still_needs(account):
+    rows = _eligible(account, 0, exclude_slots=True)
     fitting = [row for row in rows if not row["would_overload"]]
-    unlocks = [row["unlocks"] for row in fitting]
+    # Courses that fill an outstanding requirement come first, and within that
+    # group the ones that unlock the most come first.
+    needed = [row for row in fitting if row["counts_toward"]]
+    assert needed, "nothing was flagged as counting toward a requirement"
+    assert fitting[: len(needed)] == needed
+    unlocks = [row["unlocks"] for row in needed]
     assert unlocks == sorted(unlocks, reverse=True)
-    # CIS 1200 sits above almost the whole degree, so it should lead.
-    assert fitting[0]["code"] == "CIS 1200"
-    assert fitting[0]["unlocks"] >= 5
+    # With ten programs seeded, MATH 1400 sits above more of the catalog than
+    # CIS 1200 does, so the leader is whichever genuinely unlocks the most.
+    assert needed[0]["unlocks"] >= 10
+    assert {"CIS 1200", "MATH 1400"} <= {row["code"] for row in needed[:5]}
 
 
 def test_courses_that_would_overload_the_term_are_flagged_and_sorted_last(account):
@@ -75,17 +81,24 @@ def test_courses_that_would_overload_the_term_are_flagged_and_sorted_last(accoun
     assert half["would_overload"] is True
 
 
-def test_filtering_by_requirement_bucket(account):
-    rows = _eligible(account, 4, category="Technical Elective")
+def test_filtering_by_subject(account):
+    rows = _eligible(account, 4, subject="MATH")
     assert rows
-    assert {row["category"] for row in rows} == {"Technical Elective"}
+    assert {row["subject"] for row in rows} == {"MATH"}
 
 
-def test_placeholders_can_be_excluded(account):
+def test_filtering_to_one_kind_of_slot(account):
+    rows = _eligible(account, 4, slot_tag="ssh")
+    assert rows
+    assert all(row["is_slot"] for row in rows)
+    assert all(row["code"].startswith("SSH-") for row in rows)
+
+
+def test_slots_can_be_excluded(account):
     with_slots = _eligible(account, 4)
-    without = _eligible(account, 4, exclude_placeholders=True)
-    assert any(row["is_placeholder"] for row in with_slots)
-    assert not any(row["is_placeholder"] for row in without)
+    without = _eligible(account, 4, exclude_slots=True)
+    assert any(row["is_slot"] for row in with_slots)
+    assert not any(row["is_slot"] for row in without)
 
 
 def test_eligibility_agrees_with_validation(account):
@@ -99,7 +112,7 @@ def test_eligibility_agrees_with_validation(account):
     account.place("CIS 1600", 0)
     account.place("MATH 1400", 0)
 
-    offered = _eligible(account, 2, exclude_placeholders=True)
+    offered = _eligible(account, 2, exclude_slots=True)
     assert len(offered) > 10
 
     for row in offered[:12]:

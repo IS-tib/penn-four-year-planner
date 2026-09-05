@@ -1,21 +1,20 @@
 """What could a student actually take in a given term?
 
-This is the question the validator answers backwards. The validator takes a
+This is the validator's question asked backwards. The validator takes a
 placement and reports what is wrong with it; this walks the same rules forward
 and reports every course that would be fine. Both read the same prerequisite
 graph, so they cannot disagree: a course this returns for a term is a course the
-validator will accept in that term.
+validator will accept in that term. There is a test that enforces exactly that.
 
-The ordering matters more than it looks. A student opening this list wants to
-see the courses that keep the degree moving, not an alphabetical dump, so
-results are sorted by how much they unlock and then by requirement bucket.
+The ordering matters more than it looks. A student opening this list wants the
+courses that keep the degree moving, not an alphabetical dump, so results are
+sorted by how much each one unlocks further down the chain.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..catalog import CATEGORY_ORDER
 from ..config import settings
 from .planner import CourseInfo, PrereqGroup, equivalence_map
 
@@ -26,14 +25,17 @@ class EligibleCourse:
     code: str
     title: str
     credits: float
-    category: str
-    is_placeholder: bool
-    # How many other courses this one is a prerequisite for, directly or not.
+    subject: str
+    is_slot: bool
+    # How many courses this one leads to, directly or further along the chain.
     unlocks: int
     # True when adding it would push the term past the overload threshold. It
     # is still offered, because a student may well intend to petition, but it
     # is offered with a warning rather than silently.
     would_overload: bool
+    # True when this course could fill a still-unsatisfied requirement of the
+    # plan's program, which is usually what a student is actually looking for.
+    counts_toward: str | None
 
 
 class EligibilityFinder:
@@ -41,11 +43,9 @@ class EligibilityFinder:
         self,
         courses: dict[int, CourseInfo],
         prereqs: dict[int, list[PrereqGroup]],
-        placeholders: set[int],
     ) -> None:
         self._courses = courses
         self._prereqs = prereqs
-        self._placeholders = placeholders
         self._equivalents = equivalence_map(courses)
         self._reach = _transitive_dependents(courses, prereqs)
 
@@ -78,9 +78,13 @@ class EligibilityFinder:
         placements: dict[int, int],
         term: int,
         *,
-        category: str | None = None,
-        exclude_placeholders: bool = False,
+        subject: str | None = None,
+        slot_tag: str | None = None,
+        exclude_slots: bool = False,
+        wanted: dict[int, str] | None = None,
     ) -> list[EligibleCourse]:
+        """`wanted` maps course id to the requirement label it would help fill."""
+        wanted = wanted or {}
         term_load = round(
             sum(
                 self._courses[cid].credits
@@ -92,9 +96,11 @@ class EligibilityFinder:
 
         results: list[EligibleCourse] = []
         for course in self._courses.values():
-            if category is not None and course.category != category:
+            if slot_tag is not None and course.slot_tag != slot_tag:
                 continue
-            if exclude_placeholders and course.id in self._placeholders:
+            if subject is not None and course.subject != subject:
+                continue
+            if exclude_slots and course.is_slot:
                 continue
             if self._already_covered(course.id, placements):
                 continue
@@ -109,21 +115,21 @@ class EligibilityFinder:
                     code=course.code,
                     title=course.title,
                     credits=course.credits,
-                    category=course.category,
-                    is_placeholder=course.id in self._placeholders,
+                    subject=course.subject,
+                    is_slot=course.is_slot,
                     unlocks=len(self._reach.get(course.id, ())),
                     would_overload=(
                         term_load + course.credits > settings.max_term_credits
                     ),
+                    counts_toward=wanted.get(course.id),
                 )
             )
 
-        order = {name: index for index, name in enumerate(CATEGORY_ORDER)}
         results.sort(
             key=lambda item: (
-                item.would_overload,          # things that fit come first
-                -item.unlocks,                # then whatever opens the most doors
-                order.get(item.category, 99),
+                item.would_overload,           # things that fit come first
+                item.counts_toward is None,    # then what the degree still needs
+                -item.unlocks,                 # then what opens the most doors
                 item.code,
             )
         )
@@ -137,8 +143,7 @@ def _transitive_dependents(
 
     CIS 1200 directly unlocks CIS 1210 and CIS 2400, but transitively it also
     unlocks CIS 3200, CIS 4480 and CIS 4710. The transitive count is the honest
-    measure of how much a course matters to the rest of the degree, and it is
-    what the ordering above uses.
+    measure of how much a course matters to the rest of a degree.
     """
     direct: dict[int, set[int]] = {}
     for course_id, groups in prereqs.items():

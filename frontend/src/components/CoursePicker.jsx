@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "../api.js";
 import { useAuth } from "../auth.jsx";
 import { Dialog } from "./Dialog.jsx";
-import { categoryColor } from "./CourseCard.jsx";
+import { subjectColor } from "./CourseCard.jsx";
 
 /**
  * Pick a course the plan could legally take.
@@ -33,10 +33,9 @@ export function CoursePicker({ planId, termIndex, termLabel, mode, slot, onChoos
     api
       .eligible(token, planId, {
         termIndex,
-        // A slot is being resolved into a real course, so only offer courses
-        // from the same requirement bucket, and never another placeholder.
-        category: swapping ? slot?.category : undefined,
-        excludePlaceholders: swapping,
+        // A slot is being resolved into a real course, so never offer another
+        // placeholder in its place.
+        excludeSlots: swapping,
       })
       .then((found) => {
         if (!cancelled) setRows(found);
@@ -47,7 +46,7 @@ export function CoursePicker({ planId, termIndex, termLabel, mode, slot, onChoos
     return () => {
       cancelled = true;
     };
-  }, [token, planId, termIndex, swapping, slot?.category]);
+  }, [token, planId, termIndex, swapping]);
 
   const visible = useMemo(() => {
     const needle = search.trim().toLowerCase();
@@ -62,7 +61,8 @@ export function CoursePicker({ planId, termIndex, termLabel, mode, slot, onChoos
 
   const title = swapping ? `Fill ${slot?.code}` : `Add to ${termLabel}`;
   const subtitle = swapping
-    ? `Courses in the ${slot?.category} requirement whose prerequisites are met by ${termLabel}.`
+    ? `Real courses whose prerequisites are met by ${termLabel}. Whichever you pick `
+      + `inherits the slot, so the audit knows what it counts toward.`
     : `Everything whose prerequisites would be satisfied by ${termLabel}.`;
 
   return (
@@ -86,7 +86,7 @@ export function CoursePicker({ planId, termIndex, termLabel, mode, slot, onChoos
         </label>
       </div>
 
-      {error ? <p className="auth-error">{error}</p> : null}
+      {error ? <p className="form-error">{error}</p> : null}
       {rows === null && !error ? (
         <p className="picker-empty">
           <span className="spinner" />
@@ -106,21 +106,26 @@ export function CoursePicker({ planId, termIndex, termLabel, mode, slot, onChoos
               type="button"
               className="picker-row"
               data-overload={row.would_overload}
-              style={{ "--cat": categoryColor(row.category) }}
+              style={{ "--cat": subjectColor(row.subject) }}
               onClick={() => onChoose(row)}
             >
               <span className="picker-code">{row.code}</span>
               <span className="picker-title">{row.title}</span>
+              {row.counts_toward ? (
+                <span className="chip" data-tone="navy" title="Fills an outstanding requirement">
+                  {row.counts_toward}
+                </span>
+              ) : null}
               {row.unlocks > 0 ? (
                 <span
-                  className="picker-tag"
+                  className="chip"
                   title="Courses this one leads to, directly or further along the chain"
                 >
                   unlocks {row.unlocks}
                 </span>
               ) : null}
               {row.would_overload ? (
-                <span className="picker-tag" data-tone="warn">
+                <span className="chip" data-tone="warn">
                   over the load limit
                 </span>
               ) : null}

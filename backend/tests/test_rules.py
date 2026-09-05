@@ -34,24 +34,20 @@ def test_taking_only_one_of_a_cross_listed_pair_is_fine(account):
     assert _diagnostics(detail, "duplicate_course") == []
 
 
-def test_a_graduate_number_satisfies_the_core_requirement(account):
+
+
+
+def test_a_graduate_number_fills_the_core_requirement_row(account):
     account.place("CIS 2400", 0)
     detail = account.place("CIS 5480", 2).json()
-    note = _diagnostics(detail, "core_not_yet_planned")[0]
-    # CIS 5480 covers the operating systems core requirement, so neither number
-    # should still be listed as outstanding.
-    assert "CIS 4480" not in note["message"]
-    assert "CIS 5480" not in note["message"]
-
-
-def test_the_core_note_lists_each_requirement_once(account):
-    detail = account.place("CIS 1100", 0).json()
-    note = _diagnostics(detail, "core_not_yet_planned")[0]
-    # Eight requirements outstanding, not ten, because the two cross-listed
-    # pairs collapse to one entry each.
-    assert note["message"].startswith("8 required CIS core courses are not")
-    assert "CIS 5480" not in note["message"]
-    assert "CIS 5710" not in note["message"]
+    rows = [
+        r
+        for g in detail["audit"]["groups"]
+        for r in g["requirements"]
+        if r["label"] == "CIS 4480 or CIS 5480"
+    ]
+    assert len(rows) == 1
+    assert rows[0]["satisfied"] is True
 
 
 def test_a_graduate_number_satisfies_a_prerequisite(account):
@@ -66,18 +62,28 @@ def test_a_graduate_number_satisfies_a_prerequisite(account):
     assert [d for d in detail["diagnostics"] if d["course_code"] == "CIS 5510"] == []
 
 
+def _fill_cis_elective_slot(account, slot_code, course_code, term):
+    """Put a real course into a CIS elective slot, the way the app does."""
+    account.place(slot_code, term)
+    return account.client.post(
+        f"/api/plans/{account.plan_id}/courses/{account.course_id(slot_code)}/swap",
+        json={"replacement_course_id": account.course_id(course_code)},
+        headers=account.headers,
+    ).json()
+
+
 def test_two_half_unit_language_courses_are_within_the_elective_cap(account):
     account.place("CIS 1200", 0)
-    account.place("CIS 1902", 1)
-    detail = account.place("CIS 1904", 1).json()
+    _fill_cis_elective_slot(account, "CIS-EL-1", "CIS 1902", 1)
+    detail = _fill_cis_elective_slot(account, "CIS-EL-2", "CIS 1904", 1)
     assert _diagnostics(detail, "elective_level_cap") == []
 
 
 def test_three_half_unit_language_courses_break_the_elective_cap(account):
     account.place("CIS 1200", 0)
-    account.place("CIS 1902", 1)
-    account.place("CIS 1904", 1)
-    detail = account.place("CIS 1905", 2).json()
+    _fill_cis_elective_slot(account, "CIS-EL-1", "CIS 1902", 1)
+    _fill_cis_elective_slot(account, "CIS-EL-2", "CIS 1904", 1)
+    detail = _fill_cis_elective_slot(account, "CIS-EL-3", "CIS 1905", 2)
     breach = _diagnostics(detail, "elective_level_cap")
     assert len(breach) == 1
     assert breach[0]["severity"] == "error"
@@ -86,9 +92,9 @@ def test_three_half_unit_language_courses_break_the_elective_cap(account):
         assert code in breach[0]["message"]
 
 
-def test_the_level_cap_only_counts_the_cis_elective_bucket(account):
+def test_the_level_cap_only_counts_courses_put_into_cis_elective_slots(account):
     # CIS 1100, CIS 1200 and CIS 1600 are all 1000-level and all 1 CU, but they
-    # are core and math requirements, so the elective cap must ignore them.
+    # fill named requirements, not elective slots, so the cap must ignore them.
     account.place("CIS 1100", 0)
     account.place("CIS 1200", 0)
     detail = account.place("CIS 1600", 0).json()
@@ -102,6 +108,7 @@ def test_the_catalog_exposes_cross_listing_to_the_client(account):
     entry = next(c for c in courses if c["code"] == "CIS 4480")
     assert entry["equivalent_codes"] == ["CIS 5480"]
     assert entry["level"] == 4000
+    assert entry["subject"] == "CIS"
 
 
 def test_the_catalog_exposes_what_a_course_unlocks(account):

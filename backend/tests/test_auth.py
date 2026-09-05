@@ -20,11 +20,11 @@ def test_register_returns_a_usable_token(client):
     assert response.json()["email"] == "new.student@upenn.edu"
 
 
-def test_register_creates_a_starter_plan(client):
+def test_register_does_not_guess_a_degree(client):
+    # A plan belongs to a program and the app knows ten of them, so a new
+    # account starts empty and is asked which one rather than assuming.
     account = Account(client, "starter@upenn.edu")
-    plans = client.get("/api/plans", headers=account.headers).json()
-    assert len(plans) == 1
-    assert plans[0]["name"] == "My Four Year Plan"
+    assert client.get("/api/plans", headers=account.headers).json() == []
 
 
 def test_duplicate_email_is_rejected(client):

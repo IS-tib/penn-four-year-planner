@@ -1,15 +1,19 @@
 """Request and response shapes.
 
 Pydantic validates every request body before a handler sees it, so the handlers
-below never have to check types, lengths or ranges themselves.
+never have to check types, lengths or ranges themselves.
 """
 
 from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
-from .config import settings
 from .security import MAX_PASSWORD_BYTES
+
+MAX_TERMS = 12
+
+
+# ---------------------------------------------------------------- auth ----
 
 
 class RegisterRequest(BaseModel):
@@ -55,9 +59,10 @@ class TokenResponse(BaseModel):
     user: UserOut
 
 
-class PrerequisiteGroupOut(BaseModel):
-    """One OR-group. Satisfied by any of these, in an earlier term."""
+# ------------------------------------------------------------- catalog ----
 
+
+class PrerequisiteGroupOut(BaseModel):
     codes: list[str]
     concurrent: bool
 
@@ -69,23 +74,60 @@ class CourseOut(BaseModel):
     code: str
     title: str
     credits: float
-    department: str
-    category: str
-    description: str
-    is_placeholder: bool
+    subject: str
+    description: str = ""
+    is_slot: bool = False
+    slot_tag: str | None = None
     level: int | None = None
     min_term_index: int = 0
-    # Rendered prerequisite expression, for example "CIS 1200 and CIS 1600" or
-    # "MATH 1410 or MATH 1610". Built from the prerequisite graph, not stored.
     prerequisite_text: str = ""
     prerequisite_codes: list[str] = []
     prerequisite_groups: list[PrerequisiteGroupOut] = []
-    # What taking this course opens up, and the numbers it is cross-listed at.
     unlocks_codes: list[str] = []
     equivalent_codes: list[str] = []
 
 
+class RequirementOut(BaseModel):
+    id: int
+    label: str
+    credits: float
+    slots: int
+    match_kind: str
+    slot_tag: str | None = None
+    notes: str = ""
+    option_codes: list[str] = []
+
+
+class RequirementGroupOut(BaseModel):
+    name: str
+    notes: str = ""
+    credits: float
+    requirements: list[RequirementOut]
+
+
+class ProgramOut(BaseModel):
+    id: int
+    code: str
+    name: str
+    degree: str
+    school: str
+    school_code: str
+    total_units: float | None = None
+    term_count: int
+    tracks_full_degree: bool = True
+    notes: str = ""
+    source_url: str = ""
+
+
+class ProgramDetail(ProgramOut):
+    groups: list[RequirementGroupOut]
+
+
+# --------------------------------------------------------------- plans ----
+
+
 class PlanCreate(BaseModel):
+    program_id: int
     name: str = Field(default="My Four Year Plan", min_length=1, max_length=120)
     start_year: int = Field(default=2026, ge=2000, le=2100)
 
@@ -96,22 +138,17 @@ class PlanRename(BaseModel):
 
 class PlacementCreate(BaseModel):
     course_id: int
-    term_index: int = Field(ge=0, le=settings.terms_per_plan - 1)
+    term_index: int = Field(ge=0, le=MAX_TERMS - 1)
 
 
 class PlacementMove(BaseModel):
-    term_index: int = Field(ge=0, le=settings.terms_per_plan - 1)
-
-
-class PlacementOut(BaseModel):
-    course_id: int
-    term_index: int
-    course: CourseOut
+    term_index: int = Field(ge=0, le=MAX_TERMS - 1)
 
 
 class PlacementInput(BaseModel):
     course_id: int
-    term_index: int = Field(ge=0, le=settings.terms_per_plan - 1)
+    term_index: int = Field(ge=0, le=MAX_TERMS - 1)
+    fills_slot_tag: str | None = Field(default=None, max_length=40)
 
 
 class PlacementsReplace(BaseModel):
@@ -131,20 +168,11 @@ class SwapRequest(BaseModel):
     replacement_course_id: int
 
 
-class EligibleCourseOut(BaseModel):
+class PlacementOut(BaseModel):
     course_id: int
-    code: str
-    title: str
-    credits: float
-    category: str
-    is_placeholder: bool
-    unlocks: int
-    would_overload: bool
-
-
-class ShareOut(BaseModel):
-    token: str
-    path: str
+    term_index: int
+    fills_slot_tag: str | None = None
+    course: CourseOut
 
 
 class DiagnosticOut(BaseModel):
@@ -162,10 +190,37 @@ class TermOut(BaseModel):
     course_ids: list[int]
 
 
-class CategoryProgressOut(BaseModel):
-    category: str
-    planned: float
-    target: float
+class AuditRequirementOut(BaseModel):
+    id: int
+    label: str
+    credits: float
+    slots: int
+    filled_slots: int
+    satisfied: bool
+    match_kind: str
+    slot_tag: str | None = None
+    notes: str = ""
+    matched_course_ids: list[int]
+
+
+class AuditGroupOut(BaseModel):
+    position: int
+    name: str
+    notes: str = ""
+    credits: float
+    satisfied: bool
+    requirements: list[AuditRequirementOut]
+
+
+class AuditOut(BaseModel):
+    groups: list[AuditGroupOut]
+    complete: bool
+    satisfied_count: int
+    requirement_count: int
+    credits_required: float
+    credits_matched: float
+    credits_planned: float
+    unassigned_course_ids: list[int]
 
 
 class PlanSummary(BaseModel):
@@ -174,6 +229,7 @@ class PlanSummary(BaseModel):
     id: int
     name: str
     start_year: int
+    program_id: int
 
 
 class PlanDetail(BaseModel):
@@ -181,32 +237,71 @@ class PlanDetail(BaseModel):
     name: str
     start_year: int
     share_token: str | None = None
+    program: ProgramOut
     terms: list[TermOut]
     placements: list[PlacementOut]
     diagnostics: list[DiagnosticOut]
-    progress: list[CategoryProgressOut]
+    audit: AuditOut
+    # Catalog courses some requirement of this degree would accept. The catalog
+    # sidebar filters on it so a student is not handed all 209 courses at once.
+    relevant_course_ids: list[int]
     total_planned_credits: float
-    # What the requirement buckets in this app add up to.
-    degree_total_credits: float
-    # What Penn publishes for the degree, which is one course unit more.
-    published_degree_credits: float
+    required_credits: float
 
 
 class SharedPlanOut(BaseModel):
     """A shared plan as an outsider sees it.
 
     Deliberately not PlanDetail. That carries the plan id and the share token,
-    and neither belongs in a response handed to whoever has the link. This
-    shape is the read-only content and nothing else.
+    and neither belongs in a response handed to whoever has the link.
     """
 
     name: str
     start_year: int
     owner_name: str
+    program: ProgramOut
     terms: list[TermOut]
     placements: list[PlacementOut]
     diagnostics: list[DiagnosticOut]
-    progress: list[CategoryProgressOut]
+    audit: AuditOut
     total_planned_credits: float
-    degree_total_credits: float
-    published_degree_credits: float
+    required_credits: float
+
+
+# ------------------------------------------------------------ features ----
+
+
+class EligibleCourseOut(BaseModel):
+    course_id: int
+    code: str
+    title: str
+    credits: float
+    subject: str
+    is_slot: bool
+    unlocks: int
+    would_overload: bool
+    counts_toward: str | None = None
+
+
+class ShareOut(BaseModel):
+    token: str
+    path: str
+
+
+class SwitchOut(BaseModel):
+    """What changing to another program would cost."""
+
+    program: ProgramOut
+    verdict: str
+    carried_over: list[CourseOut]
+    wasted: list[CourseOut]
+    carried_credits: float
+    wasted_credits: float
+    remaining_credits: float
+    outstanding: int
+    free_capacity: float
+    extra_terms_from_load: int
+    longest_remaining_chain: int
+    extra_terms_from_chain: int
+    min_extra_terms: int
+    audit: AuditOut

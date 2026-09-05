@@ -129,7 +129,7 @@ function Term({
                     }
               }
               onResolve={
-                readOnly || !course.is_placeholder
+                readOnly || !course.is_slot
                   ? undefined
                   : (event) => {
                       event.stopPropagation();
@@ -169,7 +169,12 @@ export function TermGrid({
     <div className="years" data-focused={focusedId !== null && focusedId !== undefined}>
       {years.map((pair, yearIndex) => (
         <section className="year" key={yearIndex} aria-label={YEAR_NAMES[yearIndex]}>
-          <h3 className="year-label">{YEAR_NAMES[yearIndex] ?? `Year ${yearIndex + 1}`}</h3>
+          <h3 className="year-label">
+            <span className="eyebrow">{YEAR_NAMES[yearIndex] ?? `Year ${yearIndex + 1}`}</span>
+            <span className="cu tabular">
+              {Math.round(pair.reduce((sum, term) => sum + term.credits, 0) * 100) / 100} CU
+            </span>
+          </h3>
           <div className="year-terms">
             {pair.map((term) => (
               <Term

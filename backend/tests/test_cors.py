@@ -83,3 +83,21 @@ def test_the_authorization_header_is_allowed(client):
     )
     assert response.status_code == 200
     assert "authorization" in response.headers["access-control-allow-headers"].lower()
+
+
+def test_the_bare_url_says_what_the_service_is(client):
+    """A deployed API's root should not answer with a 404.
+
+    Anyone pasting the API address into a browser sees this, and "Not Found"
+    reads as a broken deployment rather than as a service with no root route.
+    """
+    response = client.get("/")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["service"] == "Penn Four Year Planner API"
+    assert body["docs"] == "/docs"
+    assert body["health"] == "/api/health"
+
+
+def test_the_health_check_render_uses_still_works(client):
+    assert client.get("/api/health").json() == {"status": "ok"}

@@ -1,14 +1,21 @@
-const CATEGORY_VAR = {
-  "CIS Core": "var(--cat-core)",
-  "Math & Natural Science": "var(--cat-math)",
-  "CIS Elective": "var(--cat-ciselective)",
-  "Technical Elective": "var(--cat-tech)",
-  "General Elective": "var(--cat-general)",
-  "Free Elective": "var(--cat-free)",
+const SUBJECT_VAR = {
+  CIS: "var(--cat-cis)",
+  NETS: "var(--cat-cis)",
+  MATH: "var(--cat-math)",
+  STAT: "var(--cat-math)",
+  ENM: "var(--cat-math)",
+  PHYS: "var(--cat-phys)",
+  BIOL: "var(--cat-bio)",
+  BE: "var(--cat-bio)",
+  CHEM: "var(--cat-chem)",
+  ESE: "var(--cat-eng)",
+  MEAM: "var(--cat-eng)",
+  ENGR: "var(--cat-eng)",
 };
 
-export function categoryColor(category) {
-  return CATEGORY_VAR[category] ?? "var(--cat-free)";
+/** Colour by subject, so a plan reads as a shape rather than a list. */
+export function subjectColor(subject) {
+  return SUBJECT_VAR[subject] ?? "var(--cat-slot)";
 }
 
 const RELATION_LABEL = {
@@ -18,16 +25,16 @@ const RELATION_LABEL = {
 };
 
 /**
- * One course, rendered either in the catalog list or inside a term.
+ * One course, in the catalog list or inside a term.
  *
- * It is a button rather than a div so that the whole card is reachable with a
+ * It is a button rather than a div so the whole card is reachable with a
  * keyboard. Dragging is the fast path for a mouse; selecting the card and then
  * choosing a term is the path that works on a phone and with a keyboard, and
  * both end at the same API call.
  *
- * `relation` is how this course relates to whichever one is currently focused,
- * and it is what makes the prerequisite graph legible: focus CIS 1200 and every
- * course downstream of it lights up wherever it sits in the plan.
+ * `relation` is how this course relates to whichever one is focused, and it is
+ * what makes the prerequisite graph legible: focus CIS 1200 and everything
+ * downstream lights up wherever it sits in the plan.
  */
 export function CourseCard({
   course,
@@ -51,13 +58,14 @@ export function CourseCard({
   return (
     <div
       className="course"
-      style={{ "--cat": categoryColor(course.category) }}
+      style={{ "--cat": subjectColor(course.subject) }}
       data-course-code={course.code}
       data-selected={selected}
       data-placed={placed}
       data-flagged={flagged}
       data-dragging={dragging}
       data-leaving={leaving}
+      data-slot={course.is_slot}
       data-relation={relation ?? undefined}
       draggable={Boolean(onDragStart)}
       onDragStart={onDragStart}
@@ -65,10 +73,10 @@ export function CourseCard({
     >
       <button
         type="button"
+        className="course-hit"
         onClick={onActivate}
         aria-pressed={selected}
         aria-label={label}
-        className="course-hit"
       >
         <span className="course-top">
           <span className="course-code">{course.code}</span>
@@ -101,7 +109,7 @@ export function CourseCard({
         {onRemove ? (
           <button
             type="button"
-            className="course-icon"
+            className="course-icon danger"
             onClick={onRemove}
             aria-label={`Remove ${course.code} from this plan`}
             title="Remove"

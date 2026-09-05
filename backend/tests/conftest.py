@@ -54,9 +54,15 @@ def db():
 
 
 class Account:
-    """A registered user plus the headers needed to act as them."""
+    """A registered user, their headers, and a plan to work in."""
 
-    def __init__(self, client: TestClient, email: str, password: str = "correct-horse-1"):
+    def __init__(
+        self,
+        client: TestClient,
+        email: str,
+        password: str = "correct-horse-1",
+        program: str = "CIS-BSE",
+    ):
         response = client.post(
             "/api/auth/register",
             json={"email": email, "display_name": email.split("@")[0], "password": password},
@@ -69,12 +75,51 @@ class Account:
         self.token = body["access_token"]
         self.id = body["user"]["id"]
         self.headers = {"Authorization": f"Bearer {self.token}"}
+        self._programs: dict[str, dict] = {}
+        self._plan_id: int | None = None
+        self.program_code = program
+
+    # -- programs ---------------------------------------------------------
+    def programs(self) -> dict[str, dict]:
+        if not self._programs:
+            rows = self.client.get("/api/programs").json()
+            self._programs = {row["code"]: row for row in rows}
+        return self._programs
+
+    def program(self, code: str) -> dict:
+        return self.programs()[code]
+
+    # -- plans ------------------------------------------------------------
+    def new_plan(self, program: str = "CIS-BSE", name: str = "Test plan") -> dict:
+        response = self.client.post(
+            "/api/plans",
+            json={
+                "program_id": self.program(program)["id"],
+                "name": name,
+                "start_year": 2026,
+            },
+            headers=self.headers,
+        )
+        assert response.status_code == 201, response.text
+        return response.json()
 
     @property
-    def default_plan_id(self) -> int:
-        plans = self.client.get("/api/plans", headers=self.headers).json()
-        return plans[0]["id"]
+    def plan_id(self) -> int:
+        if self._plan_id is None:
+            self._plan_id = self.new_plan(self.program_code)["id"]
+        return self._plan_id
 
+    # kept as an alias so the intent reads clearly at call sites
+    @property
+    def default_plan_id(self) -> int:
+        return self.plan_id
+
+    def plan(self, plan_id: int | None = None) -> dict:
+        return self.client.get(
+            f"/api/plans/{plan_id or self.plan_id}", headers=self.headers
+        ).json()
+
+    # -- courses ----------------------------------------------------------
     def course_id(self, code: str) -> int:
         response = self.client.get(
             "/api/courses", params={"search": code}, headers=self.headers
@@ -87,10 +132,17 @@ class Account:
 
     def place(self, code: str, term: int, plan_id: int | None = None):
         return self.client.post(
-            f"/api/plans/{plan_id or self.default_plan_id}/courses",
+            f"/api/plans/{plan_id or self.plan_id}/courses",
             json={"course_id": self.course_id(code), "term_index": term},
             headers=self.headers,
         )
+
+    def autofill(self, plan_id: int | None = None) -> dict:
+        response = self.client.post(
+            f"/api/plans/{plan_id or self.plan_id}/autofill", headers=self.headers
+        )
+        assert response.status_code == 200, response.text
+        return response.json()
 
 
 @pytest.fixture()
@@ -101,3 +153,15 @@ def account(client):
 @pytest.fixture()
 def other_account(client):
     return Account(client, "someone.else@upenn.edu")
+
+
+def diagnostics(detail: dict, code: str) -> list[dict]:
+    return [d for d in detail["diagnostics"] if d["code"] == code]
+
+
+def errors(detail: dict) -> list[dict]:
+    return [d for d in detail["diagnostics"] if d["severity"] == "error"]
+
+
+def codes(detail: dict) -> set[str]:
+    return {p["course"]["code"] for p in detail["placements"]}

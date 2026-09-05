@@ -1,4 +1,4 @@
-import { categoryColor } from "./CourseCard.jsx";
+import { subjectColor } from "./CourseCard.jsx";
 
 /**
  * The focused course and its neighbourhood in the prerequisite graph.
@@ -20,9 +20,9 @@ export function CourseDetail({ course, plan, termLabels, onDismiss, onJumpTo }) 
     <section className="panel detail" aria-label={`About ${course.code}`}>
       <div className="panel-head">
         <h2>
-          <span style={{ color: categoryColor(course.category) }}>{course.code}</span>
+          <span style={{ color: subjectColor(course.subject) }}>{course.code}</span>
         </h2>
-        <button type="button" className="btn btn-quiet" onClick={onDismiss}>
+        <button type="button" className="btn btn-sm btn-ghost" onClick={onDismiss}>
           Clear
         </button>
       </div>
@@ -30,7 +30,7 @@ export function CourseDetail({ course, plan, termLabels, onDismiss, onJumpTo }) 
       <div className="detail-body">
         <p className="detail-title">{course.title}</p>
         <p className="detail-meta">
-          {course.credits} CU &middot; {course.category}
+          {course.credits} CU &middot; {course.subject}
           {placement ? ` · ${termLabels[placement.term_index]}` : " · not in this plan"}
         </p>
 
@@ -83,7 +83,7 @@ function DetailList({ label, codes, text, onJumpTo, empty, note }) {
   const list = codes ?? [];
   return (
     <div className="detail-row">
-      <h3>{label}</h3>
+      <h4>{label}</h4>
       {list.length === 0 ? (
         <p className="detail-empty">{empty}</p>
       ) : (

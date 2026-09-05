@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -11,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..deps import get_current_user
-from ..models import Plan, User
+from ..models import User
 from ..schemas import LoginRequest, RegisterRequest, TokenResponse, UserOut
 from ..security import create_access_token, hash_password, verify_password
 from ..services.ratelimit import limit_login, limit_register
@@ -67,15 +65,9 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> TokenRe
             detail="An account with that email already exists",
         ) from None
 
-    # Give every new account something to open, so the first screen after
-    # signing up is a plan rather than an empty state with a button.
-    db.add(
-        Plan(
-            user_id=user.id,
-            name="My Four Year Plan",
-            start_year=datetime.now(timezone.utc).year,
-        )
-    )
+    # No starter plan any more. A plan belongs to a degree, and the app
+    # supports ten of them, so the first thing a new account sees is the
+    # question of which one rather than a guess.
     db.commit()
     db.refresh(user)
     return _issue(user)

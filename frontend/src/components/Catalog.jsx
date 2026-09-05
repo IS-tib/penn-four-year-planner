@@ -1,18 +1,10 @@
 import { useMemo, useState } from "react";
 import { CourseCard } from "./CourseCard.jsx";
 
-const CATEGORIES = [
-  "CIS Core",
-  "Math & Natural Science",
-  "CIS Elective",
-  "Technical Elective",
-  "General Elective",
-  "Free Elective",
-];
-
 export function Catalog({
   courses,
   placedIds,
+  relevantIds,
   selectedId,
   onSelect,
   onDragStart,
@@ -21,27 +13,40 @@ export function Catalog({
   relationOf,
 }) {
   const [search, setSearch] = useState("");
-  const [category, setCategory] = useState("");
+  const [subject, setSubject] = useState("");
   const [hidePlaced, setHidePlaced] = useState(true);
+  // On by default. Two hundred courses sorted by code opens a Computer Science
+  // plan on Bioengineering, which is a worse first impression than it sounds.
+  const [onlyRelevant, setOnlyRelevant] = useState(true);
 
-  // Filtering happens in the browser because the whole catalog is a few dozen
-  // rows and already loaded. A search box that hits the network on every
-  // keystroke would be slower and would not behave any better.
+  const subjects = useMemo(
+    () => [...new Set(courses.filter((c) => !c.is_slot).map((c) => c.subject))].sort(),
+    [courses],
+  );
+
+  // Filtering happens in the browser because the whole catalog is already
+  // loaded. A search box that hit the network on every keystroke would be
+  // slower and would not behave any better.
   const visible = useMemo(() => {
     const needle = search.trim().toLowerCase();
     return courses.filter((course) => {
-      if (category && course.category !== category) return false;
+      if (subject === "__slots") {
+        if (!course.is_slot) return false;
+      } else if (subject && course.subject !== subject) {
+        return false;
+      }
       if (hidePlaced && placedIds.has(course.id)) return false;
+      if (onlyRelevant && relevantIds && !relevantIds.has(course.id)) return false;
       if (!needle) return true;
       return (
         course.code.toLowerCase().includes(needle) ||
         course.title.toLowerCase().includes(needle)
       );
     });
-  }, [courses, search, category, hidePlaced, placedIds]);
+  }, [courses, search, subject, hidePlaced, onlyRelevant, relevantIds, placedIds]);
 
   return (
-    <section className="panel sticky-rail rail-left" aria-label="Course catalog">
+    <section className="panel rail rail-left" aria-label="Course catalog">
       <div className="panel-head">
         <h2>Catalog</h2>
         <span className="count">{visible.length} shown</span>
@@ -56,38 +61,45 @@ export function Catalog({
           onChange={(event) => setSearch(event.target.value)}
         />
         <select
-          aria-label="Filter by requirement"
-          value={category}
-          onChange={(event) => setCategory(event.target.value)}
+          aria-label="Filter by subject"
+          value={subject}
+          onChange={(event) => setSubject(event.target.value)}
         >
-          <option value="">All requirements</option>
-          {CATEGORIES.map((name) => (
+          <option value="">All subjects</option>
+          <option value="__slots">Requirement slots</option>
+          {subjects.map((name) => (
             <option key={name} value={name}>
               {name}
             </option>
           ))}
         </select>
-        <label
-          style={{
-            display: "flex",
-            gap: "0.4rem",
-            alignItems: "center",
-            fontSize: "0.78rem",
-            color: "var(--ink-soft)",
-          }}
-        >
+        {relevantIds ? (
+          <label className="checkline" title="Courses some requirement of this degree accepts">
+            <input
+              type="checkbox"
+              checked={onlyRelevant}
+              onChange={(event) => setOnlyRelevant(event.target.checked)}
+            />
+            Only what counts toward this degree
+          </label>
+        ) : null}
+        <label className="checkline">
           <input
             type="checkbox"
             checked={hidePlaced}
             onChange={(event) => setHidePlaced(event.target.checked)}
           />
-          Hide courses already in the plan
+          Hide what is already planned
         </label>
       </div>
 
       <div className="catalog-list">
         {visible.length === 0 ? (
-          <p className="catalog-empty">Nothing matches that search.</p>
+          <p className="picker-empty">
+            {onlyRelevant && relevantIds
+              ? "Nothing here matches. Untick the degree filter to search the whole catalog."
+              : "Nothing matches that search."}
+          </p>
         ) : (
           visible.map((course) => (
             <CourseCard

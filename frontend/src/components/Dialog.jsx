@@ -49,7 +49,7 @@ export function Dialog({ title, subtitle, onClose, children, footer, wide = fals
             <h2>{title}</h2>
             {subtitle ? <p>{subtitle}</p> : null}
           </div>
-          <button type="button" className="btn btn-quiet" onClick={onClose} aria-label="Close">
+          <button type="button" className="btn btn-sm btn-ghost" onClick={onClose} aria-label="Close">
             &times;
           </button>
         </header>

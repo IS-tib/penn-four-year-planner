@@ -14,7 +14,7 @@ def _share(account):
 def test_sharing_returns_a_token_and_a_path(account):
     body = _share(account)
     assert len(body["token"]) >= 24
-    assert body["path"] == f"/?share={body['token']}"
+    assert body["path"] == f"/shared/{body['token']}"
 
 
 def test_sharing_twice_returns_the_same_link(account):
@@ -41,7 +41,7 @@ def test_a_shared_plan_is_readable_without_any_credentials(client, account):
     response = client.get(f"/api/shared/{token}")
     assert response.status_code == 200
     body = response.json()
-    assert body["name"] == "My Four Year Plan"
+    assert body["name"] == "Test plan"
     assert body["owner_name"] == "isabella"
     assert [p["course"]["code"] for p in body["placements"]] == ["CIS 1200"]
 
@@ -51,8 +51,9 @@ def test_a_shared_plan_carries_its_checks_and_progress(client, account):
     token = _share(account)["token"]
     body = client.get(f"/api/shared/{token}").json()
     assert any(d["severity"] == "error" for d in body["diagnostics"])
-    assert len(body["progress"]) == 6
-    assert body["published_degree_credits"] == 37.0
+    assert body["audit"]["requirement_count"] > 0
+    assert body["required_credits"] == 37.0
+    assert body["program"]["code"] == "CIS-BSE"
 
 
 def test_a_shared_plan_does_not_leak_the_owners_email_or_ids(client, account):
@@ -97,9 +98,7 @@ def test_only_the_owner_can_mint_or_revoke_a_link(account, other_account):
 
 def test_two_plans_get_different_tokens(account):
     first = _share(account)["token"]
-    second_plan = account.client.post(
-        "/api/plans", json={"name": "Backup", "start_year": 2026}, headers=account.headers
-    ).json()["id"]
+    second_plan = account.new_plan(name="Backup")["id"]
     second = account.client.post(
         f"/api/plans/{second_plan}/share", headers=account.headers
     ).json()["token"]
@@ -116,7 +115,7 @@ def test_csv_export_lists_every_placement(account):
     assert response.headers["content-type"].startswith("text/csv")
 
     lines = response.text.strip().splitlines()
-    assert lines[0] == "Term,Course,Title,Course Units,Requirement"
+    assert lines[0] == "Term,Course,Title,Course Units,Fills"
     assert any(line.startswith("Fall 2026,CIS 1200") for line in lines)
     assert any(line.startswith("Spring 2027,MATH 1400") for line in lines)
     assert lines[-1].startswith("Total planned")

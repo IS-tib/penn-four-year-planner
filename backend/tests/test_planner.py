@@ -90,28 +90,23 @@ def test_a_thin_term_warns_but_an_empty_one_does_not(account):
     assert [d["term_index"] for d in underload] == [0]
 
 
-def test_progress_is_tracked_per_requirement_bucket(account):
-    account.place("CIS 1100", 0)   # CIS Core, 1 CU
-    detail = account.place("MATH 1400", 0).json()  # Math & Natural Science, 1 CU
-    progress = {row["category"]: row for row in detail["progress"]}
-    assert progress["CIS Core"]["planned"] == 1.0
-    assert progress["CIS Core"]["target"] == 9.0
-    assert progress["Math & Natural Science"]["planned"] == 1.0
-    assert detail["total_planned_credits"] == 2.0
-    # The buckets this app tracks add up to 36 CU; Penn publishes 37, and the
-    # API reports both rather than silently reconciling them.
-    assert detail["degree_total_credits"] == 36.0
-    assert detail["published_degree_credits"] == 37.0
-    assert sum(row["target"] for row in detail["progress"]) == 36.0
+def test_the_audit_reports_what_a_plan_has_filled(account):
+    account.place("CIS 1100", 0)
+    detail = account.place("MATH 1400", 0).json()
+    audit = detail["audit"]
+    assert audit["credits_planned"] == 2.0
+    assert audit["credits_matched"] == 2.0
+    assert audit["satisfied_count"] == 2
+    assert audit["complete"] is False
+    assert detail["required_credits"] == 37.0
 
 
-def test_unplanned_core_courses_are_listed_once(account):
+def test_outstanding_requirements_are_summarised(account):
     detail = account.place("CIS 1100", 0).json()
-    notes = _diagnostics(detail, "core_not_yet_planned")
+    notes = _diagnostics(detail, "requirements_outstanding")
     assert len(notes) == 1
     assert notes[0]["severity"] == "info"
-    assert "CIS 3200" in notes[0]["message"]
-    assert "CIS 1100" not in notes[0]["message"]
+    assert "not yet filled" in notes[0]["message"]
 
 
 def test_a_senior_standing_course_cannot_sit_in_the_first_year(account):
