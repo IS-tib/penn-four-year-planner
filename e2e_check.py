@@ -111,6 +111,20 @@ with sync_playwright() as pw:
 
     heading("1. the landing page")
     page.goto(APP, wait_until="networkidle")
+    # Each section below the fold fades in the first time it is scrolled to.
+    # A full-page screenshot captures beyond the viewport without scrolling, so
+    # the page has to be walked down and back before it is worth photographing;
+    # otherwise the picture is a hero above four blank screens.
+    for offset in range(0, 3400, 400):
+        page.mouse.wheel(0, 400)
+        page.wait_for_timeout(120)
+    page.wait_for_timeout(700)
+    revealed = page.eval_on_selector_all(
+        ".section[data-shown]", "els => els.map(e => e.dataset.shown)"
+    )
+    check(revealed and all(v == "true" for v in revealed), f"every section reveals ({revealed})")
+    page.mouse.wheel(0, -4000)
+    page.wait_for_timeout(1400)
     page.screenshot(path=f"{SHOTS}/01-landing.png", full_page=True)
     body = raw(page)
     check("Four years, laid out" in body, "hero copy renders")
@@ -118,7 +132,50 @@ with sync_playwright() as pw:
     check("School of Engineering and Applied Science" in body, "SEAS section renders")
     check("College of Arts and Sciences" in body, "College section renders")
 
-    heading("2. the public degree pages need no account")
+    heading("2. the hero draws a real prerequisite graph")
+    check(page.locator(".hero-graph .hero-node").count() == 7, "every node renders")
+    # A gradient stroke measured against an object bounding box vanishes on a
+    # horizontal line, which is how the CIS 1100 edge disappeared once. Asking
+    # each path for its own length is what catches a path that is not there.
+    lengths = page.eval_on_selector_all(
+        ".hero-graph .hero-edge", "els => els.map(e => Math.round(e.getTotalLength()))"
+    )
+    check(len(lengths) == 6, f"every edge renders ({lengths})")
+    check(all(length > 20 for length in lengths), "none of them is a degenerate path")
+    # The last edge starts drawing at 0.86s and takes 1.1s, so anything under
+    # two seconds is measuring the animation rather than its result.
+    page.wait_for_timeout(1500)
+    offsets = page.eval_on_selector_all(
+        ".hero-graph .hero-edge",
+        "els => els.map(e => parseFloat(getComputedStyle(e).strokeDashoffset))",
+    )
+    # Compared against a tolerance rather than to zero: a finished animation
+    # settles to a sub-pixel float, and a half drawn edge is off by hundreds.
+    check(
+        all(offset < 1 for offset in offsets),
+        f"the draw-in animation finishes rather than leaving edges half drawn ({offsets})",
+    )
+
+    heading("3. the replay on the landing page runs and can be stopped")
+    # Polled rather than sampled twice a fixed interval apart, because the
+    # replay loops on its own clock and this section does not start at the same
+    # point in it every run.
+    first = page.locator(".demo-check").get_attribute("data-state")
+    flipped = False
+    for _ in range(40):
+        page.wait_for_timeout(300)
+        if page.locator(".demo-check").get_attribute("data-state") != first:
+            flipped = True
+            break
+    check(flipped, f"the check flips between failing and clear on its own (from {first})")
+    page.get_by_role("button", name="Pause").click()
+    paused = page.locator(".demo-mover").get_attribute("style")
+    page.wait_for_timeout(4200)
+    check(page.locator(".demo-mover").get_attribute("style") == paused, "pause holds it still")
+    page.get_by_role("button", name="Play").click()
+    check(page.locator(".demo-terms").count() == 1, "the replay is one element, not a video")
+
+    heading("4. the public degree pages need no account")
     page.get_by_role("link", name="Browse degrees").first.click()
     page.wait_for_url("**/programs", timeout=10000)
     page.wait_for_selector(".program-card", timeout=10000)
@@ -133,7 +190,7 @@ with sync_playwright() as pw:
     check("catalog source" in detail, "it links back to the catalog")
     page.screenshot(path=f"{SHOTS}/02-degree.png", full_page=True)
 
-    heading("3. register")
+    heading("5. register")
     email = f"e2e-{uuid.uuid4().hex[:8]}@upenn.edu"
     page.goto(f"{APP}/signup", wait_until="networkidle")
     page.fill("#displayName", "Isabella")
@@ -145,7 +202,7 @@ with sync_playwright() as pw:
     check("Nothing planned yet" in page.inner_text("body"), "a new account starts with no plan")
     check(page.locator(".sidebar").count() == 1, "the app shell renders")
 
-    heading("4. choosing a degree")
+    heading("6. choosing a degree")
     page.get_by_role("link", name="Choose a degree").click()
     page.wait_for_url("**/plans/new", timeout=10000)
     page.wait_for_timeout(600)
@@ -163,7 +220,7 @@ with sync_playwright() as pw:
     check(page.locator(".term").count() == 8, "eight terms render")
     check("Class of 2030" in page.locator(".plan-name").input_value(), "the name is kept")
 
-    heading("5. the catalog opens filtered to the degree")
+    heading("7. the catalog opens filtered to the degree")
     filtered = page.locator(".catalog-list .course").count()
     first_codes = [
         c.strip() for c in page.locator(".catalog-list .course .course-code").all_text_contents()[:4]
@@ -178,7 +235,7 @@ with sync_playwright() as pw:
     page.get_by_label("Only what counts toward this degree").check()
     page.wait_for_timeout(300)
 
-    heading("6. an out-of-order prerequisite is caught by the server")
+    heading("8. an out-of-order prerequisite is caught by the server")
     page.fill("input[type=search]", "CIS 3200")
     page.wait_for_timeout(350)
     page.locator(".catalog-list .course").first.locator("button").first.click()
@@ -188,7 +245,7 @@ with sync_playwright() as pw:
     check(page.locator(".course[data-flagged='true']").count() >= 1, "the course is flagged")
     page.screenshot(path=f"{SHOTS}/04-prerequisite-error.png", full_page=True)
 
-    heading("7. clicking a check jumps to the course it blames")
+    heading("9. clicking a check jumps to the course it blames")
     page.locator(".diag[data-jumpable='true']").first.click()
     page.wait_for_timeout(700)
     check(page.locator(".detail").count() == 1, "the detail panel opens")
@@ -197,7 +254,7 @@ with sync_playwright() as pw:
     check("requires" in detail and "cis 1210" in detail, "prerequisites are listed")
     check("required by" in detail, "dependents are listed")
 
-    heading("8. focusing a course highlights its neighbourhood")
+    heading("10. focusing a course highlights its neighbourhood")
     page.fill("input[type=search]", "")
     page.wait_for_timeout(400)
     # Take the deliberately illegal placement back out. Autofill fills in around
@@ -221,7 +278,7 @@ with sync_playwright() as pw:
     page.keyboard.press("Escape")
     page.wait_for_timeout(300)
 
-    heading("9. autofill produced a complete degree")
+    heading("11. autofill produced a complete degree")
     check("all clear" in checks_text(page), "no errors or warnings")
     snapshot = page.locator("section[aria-label='Degree progress']").inner_text()
     check("24/24" in snapshot, f"every requirement is filled ({snapshot.splitlines()[:4]})")
@@ -229,7 +286,7 @@ with sync_playwright() as pw:
     check(all("CU" in text for text in loads), "every term shows a credit total")
     page.screenshot(path=f"{SHOTS}/06-full-plan.png", full_page=True)
 
-    heading("10. undo and redo")
+    heading("12. undo and redo")
     page.get_by_role("button", name="Undo").click()
     page.wait_for_timeout(1200)
     check("24/24" not in page.locator("section[aria-label='Degree progress']").inner_text(),
@@ -239,7 +296,7 @@ with sync_playwright() as pw:
     check("24/24" in page.locator("section[aria-label='Degree progress']").inner_text(),
           "redo put the whole plan back")
 
-    heading("11. the per-term picker offers only what is legal")
+    heading("13. the per-term picker offers only what is legal")
     page.locator(".term").nth(1).locator(".term-add").click()
     page.wait_for_selector(".dialog", timeout=6000)
     page.wait_for_timeout(800)
@@ -250,7 +307,7 @@ with sync_playwright() as pw:
     page.keyboard.press("Escape")
     page.wait_for_timeout(400)
 
-    heading("12. resolving a requirement slot into a real course")
+    heading("14. resolving a requirement slot into a real course")
     slot = page.locator(".term .course[data-slot='true']").first
     slot_code = slot.locator(".course-code").inner_text()
     slot.hover()
@@ -269,7 +326,7 @@ with sync_playwright() as pw:
     check("24/24" in page.locator("section[aria-label='Degree progress']").inner_text(),
           "the resolved course still satisfies the requirement")
 
-    heading("13. dragging marks which terms are legal")
+    heading("15. dragging marks which terms are legal")
     senior = grid_card(page, "CIS 4000")
     start_drag(page, senior)
     page.wait_for_timeout(500)
@@ -281,7 +338,7 @@ with sync_playwright() as pw:
     page.wait_for_timeout(400)
     check(page.locator(".term[data-legal]").count() == 0, "the marking clears afterwards")
 
-    heading("14. dragging a gating course breaks what depends on it")
+    heading("16. dragging a gating course breaks what depends on it")
     html5_drag(page, grid_card(page, "CIS 1200"), page.locator(".term").nth(7))
     page.wait_for_timeout(1400)
     broken = checks_text(page)
@@ -291,7 +348,7 @@ with sync_playwright() as pw:
     page.wait_for_timeout(1400)
     check(page.locator(".diag[data-severity='error']").count() == 0, "putting it back clears them")
 
-    heading("15. the degree audit page")
+    heading("17. the degree audit page")
     page.get_by_role("link", name="Degree audit").click()
     page.wait_for_url("**/audit", timeout=10000)
     page.wait_for_timeout(1200)
@@ -302,7 +359,7 @@ with sync_playwright() as pw:
     check(page.locator(".req[data-satisfied='true']").count() > 15, "they are ticked off")
     page.screenshot(path=f"{SHOTS}/10-audit.png", full_page=True)
 
-    heading("16. switching majors")
+    heading("18. switching majors")
     page.get_by_role("link", name="Switch major").click()
     page.wait_for_url("**/compare", timeout=10000)
     page.wait_for_timeout(900)
@@ -323,7 +380,7 @@ with sync_playwright() as pw:
     check("Computer Engineering" in raw(page, ".verdict"),
           "comparing a second degree works")
 
-    heading("17. the plan survives a reload")
+    heading("19. the plan survives a reload")
     page.goto(f"{APP}/plans", wait_until="networkidle")
     page.wait_for_timeout(900)
     check("Class of 2030" in page.inner_text("body"), "the plan is listed on the dashboard")
@@ -335,7 +392,7 @@ with sync_playwright() as pw:
     check(page.locator("button[aria-label='Undo']").is_disabled(),
           "history does not survive a reload, and the button says so")
 
-    heading("18. CSV export")
+    heading("20. CSV export")
     with page.expect_download() as info:
         page.get_by_role("button", name="Export").click()
     download = info.value
@@ -344,7 +401,7 @@ with sync_playwright() as pw:
     check(text.startswith("Term,Course,Title,Course Units,Fills"), "it has a header row")
     check("Computer Science" in text, "it records the degree")
 
-    heading("19. sharing")
+    heading("21. sharing")
     page.get_by_role("button", name="Share").click()
     page.wait_for_selector(".dialog", timeout=6000)
     page.get_by_role("button", name="Create a read-only link").click()
@@ -368,7 +425,7 @@ with sync_playwright() as pw:
     check(email not in guest_body, "the owner's email is not exposed")
     guest.screenshot(path=f"{SHOTS}/12-shared.png", full_page=True)
 
-    heading("20. revoking the link breaks it")
+    heading("22. revoking the link breaks it")
     page.get_by_role("button", name="Share").click()
     page.wait_for_selector(".dialog", timeout=6000)
     page.get_by_role("button", name="Turn the link off").click()
@@ -379,7 +436,7 @@ with sync_playwright() as pw:
     check("Link not available" in guest.inner_text("body"), "the revoked link is refused")
     stranger.close()
 
-    heading("21. dark mode")
+    heading("23. dark mode")
     page.get_by_role("button", name="Toggle dark mode").click()
     page.wait_for_timeout(500)
     check(page.locator("html").get_attribute("data-theme") == "dark", "dark theme applies")
@@ -414,7 +471,7 @@ with sync_playwright() as pw:
     page.get_by_role("button", name="Toggle dark mode").click()
     page.wait_for_timeout(400)
 
-    heading("22. mobile layout")
+    heading("24. mobile layout")
     page.set_viewport_size({"width": 390, "height": 844})
     page.wait_for_timeout(700)
     overflow = page.evaluate(
@@ -430,7 +487,7 @@ with sync_playwright() as pw:
     check(landing_overflow <= 1, f"the landing page fits too ({landing_overflow}px)")
     page.set_viewport_size({"width": 1500, "height": 1000})
 
-    heading("23. signing out and back in")
+    heading("25. signing out and back in")
     page.goto(f"{APP}/plans", wait_until="networkidle")
     page.wait_for_timeout(700)
     page.get_by_role("button", name="Sign out").click()
@@ -447,7 +504,7 @@ with sync_playwright() as pw:
     page.wait_for_timeout(800)
     check("Class of 2030" in page.inner_text("body"), "the plan is back after signing in")
 
-    heading("24. a wrong password is refused")
+    heading("26. a wrong password is refused")
     page.get_by_role("button", name="Sign out").click()
     page.wait_for_timeout(600)
     page.goto(f"{APP}/signin", wait_until="networkidle")
@@ -462,7 +519,7 @@ with sync_playwright() as pw:
     # deliberate 401, so neither counts as an application error.
     ignorable = ("favicon", "401", "ERR_TUNNEL_CONNECTION_FAILED", "fonts.g", "404")
     real_errors = [e for e in errors if not any(token in e for token in ignorable)]
-    heading("25. console")
+    heading("27. console")
     check(not real_errors, f"no unexpected console errors ({real_errors[:3]})")
 
     context.close()

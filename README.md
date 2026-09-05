@@ -3,6 +3,7 @@
 Lay out any of ten Penn undergraduate degrees across all eight semesters, drag courses between terms, and find out immediately when the order does not actually work.
 
 Live app: https://penn-four-year-planner.vercel.app
+API docs: https://penn-four-year-planner.onrender.com/docs
 
 ## What it is
 
@@ -40,6 +41,8 @@ Ten programs are seeded across two schools: seven engineering degrees (Computer 
 
 **Sharing and export.** A revocable read-only link lets you send a plan to an advisor without them needing an account. CSV export, and a print stylesheet that drops the interface and prints just the plan.
 
+**A landing page that shows rather than claims.** The hero draws a real slice of the Computer Science prerequisite graph, transcribed from the catalog like everything else, and a scripted replay below it puts CIS 3200 before CIS 1210, shows the server's own wording of the failure, and moves it. Both are built from the same data the app runs on.
+
 **The rest.** Multiple plans per account, public degree pages that need no login, inline plan renaming, a dark mode that persists, a layout that works down to a 390px phone, and a keyboard and touch path for every drag interaction.
 
 ## How it is built
@@ -76,10 +79,12 @@ frontend/
     api.js                one fetch wrapper, typed errors
     auth.jsx              session context
     App.jsx               routes
+    reveal.js             scroll reveal and count-up, both fail-safe
     pages/                landing, auth, dashboard, planner, audit,
                           compare, programs, shared
     components/           catalog, grid, card, picker, detail, dialog,
-                          share, checks, chrome, toasts
+                          share, checks, chrome, toasts, hero graph,
+                          landing replay
     *.test.js             34 unit tests
 ```
 
@@ -174,9 +179,9 @@ The backend tests cover registration and login, token forgery and expiry, cross-
 
 The frontend tests cover the graph reading and the optimistic-update and history reducers, which are pure functions and worth testing directly.
 
-There is also `e2e_check.py`, a Playwright script that drives the running app in a real browser through 80 assertions across 25 sections: the landing page and the public degree pages, registering, choosing a degree, the catalog's degree filter, breaking a prerequisite on purpose, jumping from a check to the course it blames, focusing a course and confirming its neighbourhood lights up, autofilling a complete degree, undoing and redoing, opening the picker and confirming it withholds a course whose prerequisite is unplanned, resolving a placeholder slot, the legality marks that appear mid-drag, breaking a plan by dragging a gating course late and repairing it, the audit page, the switch-major page, surviving a reload, exporting a CSV, minting a share link and opening it with no session, revoking it, dark mode, the 390px layout, and signing out and back in. The screenshots in `screenshots/` come from that run.
+There is also `e2e_check.py`, a Playwright script that drives the running app in a real browser through 88 assertions across 27 sections: the landing page and the public degree pages, registering, choosing a degree, the catalog's degree filter, breaking a prerequisite on purpose, jumping from a check to the course it blames, focusing a course and confirming its neighbourhood lights up, autofilling a complete degree, undoing and redoing, opening the picker and confirming it withholds a course whose prerequisite is unplanned, resolving a placeholder slot, the legality marks that appear mid-drag, breaking a plan by dragging a gating course late and repairing it, the audit page, the switch-major page, surviving a reload, exporting a CSV, minting a share link and opening it with no session, revoking it, dark mode, the 390px layout, and signing out and back in. The screenshots in `screenshots/` come from that run.
 
-That script earned its place twice. It found a bug nothing else could: `PUT` was missing from the CORS `allow_methods` list, so undo and redo silently did nothing in a real browser while every test passed, because the test client does not send preflight requests. `tests/test_cors.py` now enumerates every method the API serves and asserts each one survives a preflight. It also caught the sidebar turning pale in dark mode, which no assertion about the theme attribute could have, so the dark-mode check now measures rendered luminance instead.
+That script has earned its place several times over. It found a bug nothing else could: `PUT` was missing from the CORS `allow_methods` list, so undo and redo silently did nothing in a real browser while every test passed, because the test client does not send preflight requests. `tests/test_cors.py` now enumerates every method the API serves and asserts each one survives a preflight. It also caught the sidebar turning pale in dark mode, which no assertion about the theme attribute could have, so the dark-mode check now measures rendered luminance instead. And it caught two things about the landing page that only exist because it is animated: an edge of the hero graph that never rendered at all, because a gradient measured against an object bounding box degenerates on a horizontal line, and a graph that came out half faded in every screenshot, because a full-page capture resizes the page and a resize restarts CSS keyframe animations. The first is now guarded by asking each path for its own length; the fix for the second was to express the entrance as a transition, which has no such memory.
 
 ## Running it locally
 
