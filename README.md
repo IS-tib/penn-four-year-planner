@@ -3,7 +3,6 @@
 Lay out any of ten Penn undergraduate degrees across all eight semesters, drag courses between terms, and find out immediately when the order does not actually work.
 
 Live app: https://penn-four-year-planner.vercel.app
-API docs: https://penn-four-year-planner.onrender.com/docs
 
 ## What it is
 
